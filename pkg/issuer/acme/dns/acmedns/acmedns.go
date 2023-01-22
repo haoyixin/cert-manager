@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/cpu/goacmedns"
 )
@@ -37,6 +38,7 @@ type DNSProvider struct {
 	dns01Nameservers []string
 	client           goacmedns.Client
 	accounts         map[string]goacmedns.Account
+	suffixes         map[string]goacmedns.Account
 }
 
 // NewDNSProvider returns a DNSProvider instance configured for ACME DNS
@@ -58,9 +60,18 @@ func NewDNSProviderHostBytes(host string, accountJSON []byte, dns01Nameservers [
 		return nil, fmt.Errorf("Error unmarshalling accountJSON: %s", err)
 	}
 
+	suffixes := make(map[string]goacmedns.Account)
+	for domain := range accounts {
+		if strings.HasPrefix(domain, "*.") {
+			suffixes[strings.TrimPrefix(domain, "*.")] = accounts[domain]
+			delete(accounts, domain)
+		}
+	}
+
 	return &DNSProvider{
 		client:           client,
 		accounts:         accounts,
+		suffixes:         suffixes,
 		dns01Nameservers: dns01Nameservers,
 	}, nil
 }
@@ -70,6 +81,12 @@ func (c *DNSProvider) Present(domain, fqdn, value string) error {
 	if account, exists := c.accounts[domain]; exists {
 		// Update the acme-dns TXT record.
 		return c.client.UpdateTXTRecord(account, value)
+	}
+
+	for suffix, account := range c.suffixes {
+		if strings.HasSuffix(domain, suffix) {
+			return c.client.UpdateTXTRecord(account, value)
+		}
 	}
 
 	return fmt.Errorf("account credentials not found for domain %s", domain)
